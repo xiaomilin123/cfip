@@ -2,8 +2,8 @@ name: Sync IPs from cf-speed-dns
 
 on:
   schedule:
-    # 每30分钟执行一次
-    - cron: '*/30 * * * *'
+    # 免费仓库最小间隔1小时，每小时执行一次
+    - cron: '0 * * * *'
   workflow_dispatch:  # 允许手动触发
 
 jobs:
