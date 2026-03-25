@@ -17,41 +17,39 @@ jobs:
     - name: Fetch and parse IP data
       run: |
         # 获取HTML内容
-        echo "Fetching IP data from cf-speed-dns..."
         html_content=$(curl -s "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html")
         
-        # 提取所有IP地址并去重
-        echo "Extracting IP addresses..."
-        extracted_ips=$(echo "$html_content" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
+        # 提取所有IP地址
+        echo "$html_content" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u > temp_ips.txt
         
         # 创建输出文件
-        output_file="ips.txt"
-        > $output_file
+        > ips.txt
         
         count=0
-        for ip in $extracted_ips; do
-          # 基本格式验证（跳过格式验证，直接输出）
-          if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-            # 检查每个八位组是否在0-255范围内
-            valid_ip=true
-            IFS='.' read -ra octets <<< "$ip"
-            for octet in "${octets[@]}"; do
-              if [[ $octet -lt 0 ]] || [[ $octet -gt 255 ]]; then
-                valid_ip=false
-                break
+        while IFS= read -r ip; do
+          if [[ -n "$ip" ]]; then
+            # 验证IP格式
+            if [[ $ip =~ ^([0-9]{1,3}\.)+[0-9]{1,3}$ ]]; then
+              # 检查每个数字是否在0-255范围内
+              valid=true
+              IFS='.' read -ra parts <<< "$ip"
+              for part in "${parts[@]}"; do
+                if [[ $part -lt 0 || $part -gt 255 ]]; then
+                  valid=false
+                  break
+                fi
+              done
+              
+              if [[ $valid == true ]]; then
+                echo "$ip:443#CF-github" >> ips.txt
+                echo "Added: $ip:443#CF-github"
+                ((count++))
               fi
-            done
-            
-            if [[ $valid_ip == true ]]; then
-              # 直接使用CF-github标注
-              formatted_line="$ip:443#CF-github"
-              echo "$formatted_line" >> $output_file
-              echo "Added: $formatted_line"
-              ((count++))
             fi
           fi
-        done
+        done < temp_ips.txt
         
+        rm temp_ips.txt
         echo "Processing complete. Generated ips.txt with $count entries."
         
     - name: Commit and push changes
@@ -59,7 +57,6 @@ jobs:
         git config --global user.name 'github-actions[bot]'
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         
-        # 检查是否有更改
         if [[ -n "$(git status --porcelain)" ]]; then
           git add ips.txt
           git commit -m "Update IPs from cf-speed-dns - $(date)"
