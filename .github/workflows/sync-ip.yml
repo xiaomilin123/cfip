@@ -16,49 +16,42 @@ jobs:
       
     - name: Fetch and parse IP data
       run: |
-        # 开启调试，方便看错误
-        set -x
+        # 获取HTML内容
+        html_content=$(curl -s "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html")
         
-        # 获取HTML内容，加-L支持重定向，-f捕获curl错误
-        echo "Fetching IP data from cf-speed-dns..."
-        html_content=$(curl -sL -f "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html")
-        if [ -z "$html_content" ]; then
-          echo "Error: 拉取页面内容为空！"
-          exit 1
-        fi
-        
-        # 提取所有IP地址并去重
-        echo "Extracting IP addresses..."
-        extracted_ips=$(echo "$html_content" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
+        # 提取所有IP地址
+        echo "$html_content" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort -u > temp_ips.txt
         
         # 创建输出文件
-        output_file="ips.txt"
-        > $output_file
+        > ips.txt
         
         count=0
-        for ip in $extracted_ips; do
-          if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-            valid_ip=true
-            IFS='.' read -ra octets <<< "$ip"
-            
-            for octet in "${octets[@]}"; do
-              # 核心修复：强制按十进制解析，彻底解决前导0的八进制报错问题
-              dec_octet=$((10#$octet))
-              if [[ $dec_octet -lt 0 ]] || [[ $dec_octet -gt 255 ]]; then
-                valid_ip=false
-                break
+        while IFS= read -r ip; do
+          if [[ -n "$ip" ]]; then
+            # 验证IP格式
+            if [[ $ip =~ ^([0-9]{1,3}\.)+[0-9]{1,3}$ ]]; then
+              # 检查每个数字是否在0-255范围内（处理前导零问题）
+              valid=true
+              IFS='.' read -ra parts <<< "$ip"
+              for part in "${parts[@]}"; do
+                # 使用10#前缀强制按十进制解析，避免前导零被当作八进制
+                dec_part=$((10#$part))
+                if [[ $dec_part -lt 0 || $dec_part -gt 255 ]]; then
+                  valid=false
+                  break
+                fi
+              done
+              
+              if [[ $valid == true ]]; then
+                echo "$ip:443#CF-github" >> ips.txt
+                echo "Added: $ip:443#CF-github"
+                ((count++))
               fi
-            done
-            
-            if [[ $valid_ip == true ]]; then
-              formatted_line="$ip:443#CF-github"
-              echo "$formatted_line" >> $output_file
-              echo "Added: $formatted_line"
-              ((count++))
             fi
           fi
-        done
+        done < temp_ips.txt
         
+        rm temp_ips.txt
         echo "Processing complete. Generated ips.txt with $count entries."
         
     - name: Commit and push changes
@@ -66,11 +59,8 @@ jobs:
         git config --global user.name 'github-actions[bot]'
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         
-        # 检查是否有更改
         if [[ -n "$(git status --porcelain)" ]]; then
           git add ips.txt
           git commit -m "Update IPs from cf-speed-dns - $(date)"
           git push
-        else
-          echo "No changes to commit, skip push."
         fi
