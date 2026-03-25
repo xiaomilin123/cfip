@@ -24,75 +24,122 @@ jobs:
         temp_file="temp_ips.txt"
         echo "$html_content" > $temp_file
         
-        # 提取IP地址的正则模式
+        # 提取所有IP地址（使用更全面的正则表达式）
+        echo "Extracting IP addresses..."
         ips=()
-        while IFS= read -r line; do
-          # 查找包含IP的行
-          if [[ $line =~ ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}) ]]; then
-            ip=$(echo "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
-            if [[ -n "$ip" ]]; then
-              ips+=("$ip")
-            fi
-          fi
-        done < $temp_file
+        # 使用grep提取所有IP地址，去重
+        extracted_ips=$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' $temp_file | sort -u)
         
-        # 去重
-        unique_ips=($(printf '%s\n' "${ips[@]}" | sort -u))
-        
-        # 创建输出文件
+        # 遍历每个IP并生成格式化输出
         output_file="ips.txt"
         > $output_file
         
-        # 解析IP地理位置并生成格式化的输出
-        for ip in "${unique_ips[@]}"; do
+        count=0
+        for ip in $extracted_ips; do
           if [[ -n "$ip" ]]; then
-            # 使用免费的IP地理位置API获取国家信息
-            country_code=$(curl -s --connect-timeout 5 "http://ip-api.com/json/$ip?fields=countryCode" | jq -r '.countryCode' 2>/dev/null || echo "UNKNOWN")
-            
-            # 如果API调用失败，使用备用方法
-            if [[ "$country_code" == "UNKNOWN" ]] || [[ -z "$country_code" ]] || [[ "$country_code" == "null" ]]; then
-              # 使用另一个API作为备用
-              country_code=$(curl -s --connect-timeout 5 "https://ipapi.co/$ip/country_code/" 2>/dev/null || echo "UNKNOWN")
-            fi
-            
-            # 如果仍然失败，使用更简单的分类方法
-            if [[ "$country_code" == "UNKNOWN" ]] || [[ -z "$country_code" ]]; then
-              # 基于IP段进行粗略分类
-              first_octet=$(echo "$ip" | cut -d. -f1)
-              second_octet=$(echo "$ip" | cut -d. -f2)
-              
-              # 根据IP段范围进行大致分类（仅供参考）
-              if [[ "$first_octet" -eq 108 ]] || [[ "$first_octet" -eq 162 ]] || [[ "$first_octet" -eq 172 ]] || [[ "$first_octet" -eq 198 ]]; then
-                country_code="US"
-              elif [[ "$first_octet" -eq 104 ]]; then
-                country_code="US"
-              elif [[ "$first_octet" -eq 173 ]]; then
-                country_code="US"
-              elif [[ "$first_octet" -eq 141 ]]; then
-                country_code="US"
-              elif [[ "$first_octet" -eq 103 ]]; then
-                # 亚洲区域
-                if [[ "$second_octet" -ge 21 ]] && [[ "$second_octet" -le 24 ]]; then
-                  country_code="SG"
-                else
-                  country_code="AS"
+            # 验证IP格式
+            if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+              # 验证每个数字是否在0-255范围内
+              valid_ip=true
+              for octet in $(echo $ip | sed 's/\./ /g'); do
+                if [[ $octet -lt 0 ]] || [[ $octet -gt 255 ]]; then
+                  valid_ip=false
+                  break
                 fi
-              else
-                country_code="UNKNOWN"
+              done
+              
+              if [[ $valid_ip == true ]]; then
+                # 使用IP地理位置API获取国家信息
+                country_code=$(curl -s --connect-timeout 5 "http://ip-api.com/json/$ip?fields=countryCode" | jq -r '.countryCode' 2>/dev/null || echo "UNKNOWN")
+                
+                # 如果API调用失败，使用备用方法
+                if [[ "$country_code" == "UNKNOWN" ]] || [[ -z "$country_code" ]] || [[ "$country_code" == "null" ]]; then
+                  country_code=$(curl -s --connect-timeout 5 "https://ipapi.co/$ip/country_code/" 2>/dev/null || echo "UNKNOWN")
+                fi
+                
+                # 如果仍失败，使用基于IP段的分类
+                if [[ "$country_code" == "UNKNOWN" ]] || [[ -z "$country_code" ]]; then
+                  # 基于CF常用IP段进行分类
+                  first_octet=$(echo "$ip" | cut -d. -f1)
+                  second_octet=$(echo "$ip" | cut -d. -f2)
+                  
+                  case $first_octet in
+                    173)
+                      if [[ $second_octet -ge 245 && $second_octet -le 245 ]]; then
+                        country_code="US"
+                      else
+                        country_code="US"
+                      fi
+                      ;;
+                    103)
+                      # 103.21.x.x - 103.23.x.x 范围
+                      if [[ $second_octet -ge 21 && $second_octet -le 24 ]]; then
+                        country_code="SG"  # 大部分在新加坡
+                      else
+                        country_code="US"
+                      fi
+                      ;;
+                    104)
+                      # 104.16.x.x - 104.24.x.x 范围
+                      if [[ $second_octet -ge 16 && $second_octet -le 24 ]]; then
+                        country_code="US"
+                      else
+                        country_code="US"
+                      fi
+                      ;;
+                    108)
+                      country_code="US"
+                      ;;
+                    131)
+                      country_code="US"
+                      ;;
+                    141)
+                      country_code="US"
+                      ;;
+                    162)
+                      country_code="US"
+                      ;;
+                    172)
+                      # 172.64.x.x - 172.71.x.x 范围
+                      if [[ $second_octet -ge 64 && $second_octet -le 71 ]]; then
+                        country_code="US"
+                      else
+                        country_code="US"
+                      fi
+                      ;;
+                    188)
+                      country_code="US"
+                      ;;
+                    190)
+                      country_code="US"
+                      ;;
+                    197)
+                      country_code="US"
+                      ;;
+                    198)
+                      # 198.41.x.x 范围
+                      country_code="US"
+                      ;;
+                    *)
+                      country_code="US"  # 默认美国
+                      ;;
+                  esac
+                fi
+                
+                # 生成格式化的输出
+                formatted_line="$ip:443#$country_code-github"
+                echo "$formatted_line" >> $output_file
+                echo "Added: $formatted_line"
+                ((count++))
               fi
             fi
-            
-            # 生成格式化的输出
-            formatted_line="$ip:443#$country_code-github"
-            echo "$formatted_line" >> $output_file
-            echo "Added: $formatted_line"
           fi
         done
         
         # 清理临时文件
         rm $temp_file
         
-        echo "Processing complete. Generated ips.txt with $(wc -l < $output_file) entries."
+        echo "Processing complete. Generated ips.txt with $count entries."
         
     - name: Commit and push changes
       run: |
