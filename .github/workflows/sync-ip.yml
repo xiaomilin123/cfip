@@ -20,7 +20,7 @@ jobs:
         echo "Fetching IP data from cf-speed-dns..."
         html_content=$(curl -s "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html")
         
-        # 提取所有IP地址
+        # 提取所有IP地址并去重
         echo "Extracting IP addresses..."
         extracted_ips=$(echo "$html_content" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
         
@@ -49,26 +49,8 @@ jobs:
         
         count=0
         for ip in "${valid_ips[@]}"; do
-          # 基于CF常用IP段进行分类
-          first_octet=$(echo "$ip" | cut -d. -f1)
-          case $first_octet in
-            103) country_code="SG" ;;
-            104) country_code="US" ;;
-            108) country_code="US" ;;
-            131) country_code="US" ;;
-            141) country_code="US" ;;
-            162) country_code="US" ;;
-            172) country_code="US" ;;
-            173) country_code="US" ;;
-            188) country_code="US" ;;
-            190) country_code="PA" ;;
-            197) country_code="US" ;;
-            198) country_code="US" ;;
-            *) country_code="US" ;;
-          esac
-          
-          # 生成格式化的输出
-          formatted_line="$ip:443#$country_code-github"
+          # 直接使用CF-github标注
+          formatted_line="$ip:443#CF-github"
           echo "$formatted_line" >> $output_file
           echo "Added: $formatted_line"
           ((count++))
