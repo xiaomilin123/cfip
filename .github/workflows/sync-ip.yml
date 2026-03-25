@@ -16,7 +16,7 @@ jobs:
       
     - name: Fetch and parse IP data
       run: |
-        # 错误捕获：出错时自动打印出错的行和命令，精准定位问题
+        # 错误捕获
         trap 'echo -e "\nERROR: 脚本在第 $LINENO 行崩溃！执行的命令是: $BASH_COMMAND"' ERR
         
         # 开启调试
@@ -39,9 +39,8 @@ jobs:
         > $output_file
         
         count=0
-        # 核心修复：改用逐行读取，彻底解决for循环的分割问题，再也不会断
+        # 逐行处理IP
         echo "$extracted_ips" | while read ip; do
-          # 跳过空行
           [ -z "$ip" ] && continue
           
           if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
@@ -49,7 +48,6 @@ jobs:
             IFS='.' read -ra octets <<< "$ip"
             
             for octet in "${octets[@]}"; do
-              # 强制十进制解析
               dec_octet=$((10#$octet))
               if [[ $dec_octet -lt 0 ]] || [[ $dec_octet -gt 255 ]]; then
                 valid_ip=false
@@ -58,10 +56,24 @@ jobs:
             done
             
             if [[ $valid_ip == true ]]; then
-              formatted_line="$ip:443#CF-github"
+              # --------------------------
+              # 新增：自动查询IP归属国
+              # --------------------------
+              # 用ipinfo免费接口查询国家，5秒超时，失败就用默认CF
+              country=$(curl -sL -f --connect-timeout 5 "https://ipinfo.io/$ip/country")
+              
+              # 处理标记：美国的标US，其他的标CF
+              if [ -n "$country" ] && [ ${#country} -eq 2 ] && [ "$country" = "US" ]; then
+                flag="US"
+              else
+                flag="CF"
+              fi
+              
+              # 生成带标记的行
+              formatted_line="$ip:443#$flag-github"
               echo "$formatted_line" >> $output_file
               echo "Added: $formatted_line"
-              # 更兼容的计数方式，避免((...))的兼容问题
+              
               count=$((count + 1))
             fi
           fi
