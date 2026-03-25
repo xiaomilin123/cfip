@@ -24,13 +24,18 @@ jobs:
         echo "Extracting IP addresses..."
         extracted_ips=$(echo "$html_content" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
         
-        # 验证IP格式并过滤
-        valid_ips=()
+        # 创建输出文件
+        output_file="ips.txt"
+        > $output_file
+        
+        count=0
         for ip in $extracted_ips; do
+          # 基本格式验证（跳过格式验证，直接输出）
           if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-            # 验证每个数字是否在0-255范围内
+            # 检查每个八位组是否在0-255范围内
             valid_ip=true
-            for octet in $(echo $ip | sed 's/\./ /g'); do
+            IFS='.' read -ra octets <<< "$ip"
+            for octet in "${octets[@]}"; do
               if [[ $octet -lt 0 ]] || [[ $octet -gt 255 ]]; then
                 valid_ip=false
                 break
@@ -38,22 +43,13 @@ jobs:
             done
             
             if [[ $valid_ip == true ]]; then
-              valid_ips+=("$ip")
+              # 直接使用CF-github标注
+              formatted_line="$ip:443#CF-github"
+              echo "$formatted_line" >> $output_file
+              echo "Added: $formatted_line"
+              ((count++))
             fi
           fi
-        done
-        
-        # 创建输出文件
-        output_file="ips.txt"
-        > $output_file
-        
-        count=0
-        for ip in "${valid_ips[@]}"; do
-          # 直接使用CF-github标注
-          formatted_line="$ip:443#CF-github"
-          echo "$formatted_line" >> $output_file
-          echo "Added: $formatted_line"
-          ((count++))
         done
         
         echo "Processing complete. Generated ips.txt with $count entries."
