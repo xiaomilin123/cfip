@@ -56,20 +56,17 @@ jobs:
             done
             
             if [[ $valid_ip == true ]]; then
-              # --------------------------
-              # 新增：自动查询IP归属国
-              # --------------------------
-              # 用ipinfo免费接口查询国家，5秒超时，失败就用默认CF
+              # 自动查询IP归属国
               country=$(curl -sL -f --connect-timeout 5 "https://ipinfo.io/$ip/country")
               
-              # 处理标记：美国的标US，其他的标CF
-              if [ -n "$country" ] && [ ${#country} -eq 2 ] && [ "$country" = "US" ]; then
-                flag="US"
+              # 所有国家都用对应的缩写，查询失败才用CF
+              if [ -n "$country" ] && [ ${#country} -eq 2 ]; then
+                flag="$country"
               else
                 flag="CF"
               fi
               
-              # 生成带标记的行
+              # 生成带国家标记的行
               formatted_line="$ip:443#$flag-github"
               echo "$formatted_line" >> $output_file
               echo "Added: $formatted_line"
