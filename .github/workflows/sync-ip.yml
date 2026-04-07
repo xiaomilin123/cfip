@@ -2,8 +2,8 @@ name: Sync IPs from cf-speed-dns
 
 on:
   schedule:
-    # 免费仓库最小间隔1小时，每小时执行一次
-    - cron: '0 * * * *'
+    # 每2小时执行一次（免费仓库最小间隔1小时，2小时足够避免API限流）
+    - cron: '0 */2 * * *'
   workflow_dispatch:  # 允许手动触发
 
 jobs:
@@ -16,78 +16,114 @@ jobs:
       
     - name: Fetch and parse IP data
       run: |
-        # 错误捕获
-        trap 'echo -e "\nERROR: 脚本在第 $LINENO 行崩溃！执行的命令是: $BASH_COMMAND"' ERR
+        # 开启严格错误模式（但不因单次curl失败而崩溃）
+        set -euo pipefail
         
-        # 开启调试
-        set -x
+        # 重试函数：最多重试3次，间隔2秒
+        retry_curl() {
+          local url="$1"
+          local max_attempts=3
+          local attempt=1
+          while [ $attempt -le $max_attempts ]; do
+            if result=$(curl -sL -f --connect-timeout 5 --max-time 10 "$url" 2>/dev/null); then
+              echo "$result"
+              return 0
+            fi
+            sleep 2
+            attempt=$((attempt + 1))
+          done
+          return 1
+        }
         
-        # 获取内容
         echo "Fetching IP data from cf-speed-dns..."
-        html_content=$(curl -sL -f "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html")
+        html_content=$(curl -sL -f --connect-timeout 10 "https://raw.githubusercontent.com/ZhiXuanWang/cf-speed-dns/refs/heads/main/ipTop10.html")
         if [ -z "$html_content" ]; then
-          echo "Error: 拉取页面内容为空！"
+          echo "Error: Failed to fetch HTML content."
           exit 1
         fi
         
-        # 提取所有IP地址并去重
-        echo "Extracting IP addresses..."
+        # 提取所有IPv4地址并去重
         extracted_ips=$(echo "$html_content" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u)
         
-        # 创建输出文件
         output_file="ips.txt"
-        > $output_file
+        > "$output_file"
         
+        # 用于统计有效IP数量
         count=0
-        # 逐行处理IP
-        echo "$extracted_ips" | while read ip; do
+        
+        # 临时文件存放国家查询结果（避免子shell变量丢失）
+        tmp_file=$(mktemp)
+        
+        echo "$extracted_ips" | while IFS= read -r ip; do
           [ -z "$ip" ] && continue
           
-          if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-            valid_ip=true
-            IFS='.' read -ra octets <<< "$ip"
-            
-            for octet in "${octets[@]}"; do
-              dec_octet=$((10#$octet))
-              if [[ $dec_octet -lt 0 ]] || [[ $dec_octet -gt 255 ]]; then
-                valid_ip=false
-                break
-              fi
-            done
-            
-            if [[ $valid_ip == true ]]; then
-              # 自动查询IP归属国
-              country=$(curl -sL -f --connect-timeout 5 "https://ipinfo.io/$ip/country")
-              
-              # 所有国家都用对应的缩写，查询失败才用CF
-              if [ -n "$country" ] && [ ${#country} -eq 2 ]; then
+          # 验证IP格式
+          if [[ ! $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            continue
+          fi
+          
+          # 验证每个数字在0-255之间
+          valid=true
+          IFS='.' read -ra octets <<< "$ip"
+          for octet in "${octets[@]}"; do
+            dec_octet=$((10#$octet))
+            if [[ $dec_octet -lt 0 || $dec_octet -gt 255 ]]; then
+              valid=false
+              break
+            fi
+          done
+          [ "$valid" = false ] && continue
+          
+          # ---------- 国家查询（带重试、备用服务）----------
+          country=""
+          
+          # 首选：ip-api.com（免费、无key、限制宽松，支持批量但这里单个查）
+          if country=$(retry_curl "http://ip-api.com/line/$ip?fields=countryCode" | head -1); then
+            if [[ ${#country} -eq 2 ]]; then
+              flag="$country"
+            else
+              flag="CF"
+            fi
+          else
+            # 备用：ipinfo.io（可能被限流，作为最后尝试）
+            if country=$(retry_curl "https://ipinfo.io/$ip/country"); then
+              if [[ ${#country} -eq 2 ]]; then
                 flag="$country"
               else
                 flag="CF"
               fi
-              
-              # 生成带国家标记的行
-              formatted_line="$ip:443#$flag-github"
-              echo "$formatted_line" >> $output_file
-              echo "Added: $formatted_line"
-              
-              count=$((count + 1))
+            else
+              # 两次都失败，使用默认 CF
+              flag="CF"
             fi
           fi
+          
+          formatted_line="$ip:443#$flag-github"
+          echo "$formatted_line" >> "$output_file"
+          echo "$formatted_line" >> "$tmp_file"   # 用于统计
+          count=$((count + 1))
         done
         
-        echo "Processing complete. Generated ips.txt with $count entries."
+        # 从临时文件统计实际行数（避免子shell作用域问题）
+        if [ -f "$tmp_file" ]; then
+          final_count=$(wc -l < "$tmp_file")
+          rm -f "$tmp_file"
+        else
+          final_count=0
+        fi
+        
+        echo "Processing complete. Generated ips.txt with $final_count entries."
         
     - name: Commit and push changes
       run: |
         git config --global user.name 'github-actions[bot]'
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         
-        # 检查是否有更改
-        if [[ -n "$(git status --porcelain)" ]]; then
-          git add ips.txt
-          git commit -m "Update IPs from cf-speed-dns - $(date)"
-          git push
+        # 仅当 ips.txt 有实际变化时才提交
+        if git diff --quiet ips.txt; then
+          echo "No changes to ips.txt, skip commit."
         else
-          echo "No changes to commit, skip push."
+          git add ips.txt
+          git commit -m "Update IPs from cf-speed-dns - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push
         fi
